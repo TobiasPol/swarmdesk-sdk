@@ -1,0 +1,68 @@
+# Tests for the action, the template and its check script, on every push to main and every
+# pull request.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # macOS too: its built-in bash 3.2 runs the template's scripts/check.sh on contributors'
+    # Macs, and it fails on things bash 5 on Linux accepts.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - name: Check out (plain git, no stored credentials)
+        run: |
+          set -eu
+          git init -q .
+          git fetch -q --depth 1 "https://github.com/${GITHUB_REPOSITORY}.git" "$GITHUB_SHA"
+          git checkout -q --detach FETCH_HEAD
+
+      - name: Versions
+        run: |
+          node --version
+          bash --version | head -n 1
+
+      - name: Tests
+        run: node --test tests/*.test.mjs
+
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ACTIONLINT_VERSION: "1.7.12"
+    steps:
+      - name: Check out (plain git, no stored credentials)
+        run: |
+          set -eu
+          git init -q .
+          git fetch -q --depth 1 "https://github.com/${GITHUB_REPOSITORY}.git" "$GITHUB_SHA"
+          git checkout -q --detach FETCH_HEAD
+
+      - name: Shell scripts
+        run: |
+          set -eu
+          scripts=(action/*.sh templates/tensor-rank/scripts/*.sh)
+          for f in "${scripts[@]}"; do bash -n "$f"; done
+          shellcheck --version | head -n 2
+          shellcheck "${scripts[@]}"
+
+      - name: Workflows
+        run: |
+          set -eu
+          docker run --rm -v "$PWD:/repo" --workdir /repo "rhysd/actionlint:${ACTIONLINT_VERSION}" \
+            -color .github/workflows/ci.yml templates/tensor-rank/.github/workflows/deciding.yml
