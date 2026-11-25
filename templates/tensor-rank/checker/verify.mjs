@@ -55,21 +55,21 @@ function validateMatrix(mat, rows, cols, ring, label) {
 
 export function parseAndValidateSubmission(rawText, targetSpec, maxBytes = DEFAULT_MAX_BYTES) {
   if (typeof rawText !== 'string' || rawText.length === 0) {
-    return { ok: false, error: rejected('syntax_error', 'submission file is empty') };
+    return { ok: false, error: rejected('schema_error', 'submission file is empty') };
   }
   const byteLen = Buffer.byteLength(rawText, 'utf8');
   if (byteLen > maxBytes) {
     return { ok: false, error: rejected('size_limit', `submission exceeds ${maxBytes} bytes`) };
   }
   if (rawText.includes('\0') || rawText.charCodeAt(0) === 0xfeff) {
-    return { ok: false, error: rejected('syntax_error', 'submission contains invalid control bytes') };
+    return { ok: false, error: rejected('schema_error', 'submission contains invalid control bytes') };
   }
 
   let doc;
   try {
     doc = JSON.parse(rawText);
   } catch {
-    return { ok: false, error: rejected('syntax_error', 'submission is not valid strict JSON') };
+    return { ok: false, error: rejected('schema_error', 'submission is not valid strict JSON') };
   }
 
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
@@ -268,7 +268,7 @@ export function verifyCandidate(rawText, targetSpec, holderRank, maxBytes = DEFA
   }
   return {
     verdict: 'ACCEPTED',
-    reason_code: 'ok',
+    reason_code: '',
     reason: `verified rank ${doc.rank} strictly improves on holder rank ${holderRank}`,
     resolution: 'improved',
     metric_value: doc.rank,

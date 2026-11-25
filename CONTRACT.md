@@ -110,7 +110,7 @@ The `judge` job has **zero write permissions and zero secrets**. It writes `fina
 ```json
 {
   "verdict": "ACCEPTED",
-  "reason_code": "ok",
+  "reason_code": "",
   "reason": "verified rank 7 < holder 8 over Z",
   "resolution": "improved",
   "metric_value": 7,
@@ -152,7 +152,7 @@ After committing exact judged bytes on `ACCEPTED` (or detecting `STALE` / `FAULT
 | `step` | `integer \| null` | Open step ID from branch `step-<id>`. |
 | `target` | `string` | Target slug (`^[a-z0-9_]{1,48}$`). |
 | `verdict` | `string` | `"ACCEPTED"`, `"REJECTED"`, `"FAULT"`, or `"STALE"`. |
-| `reason_code` | `string` | Strictly allowlisted machine-readable code (`^[a-z0-9_]{2,40}$`), e.g. `ok`, `wrong_answer`, `bound_not_improved`, `syntax_error`, `size_limit`, `timeout`, `guard_refused`, `rate_limited`, `step_closed`, `target_moved`, `commit_failed`, `fault`. |
+| `reason_code` | `string` | Empty for an accepted verdict, otherwise one of the site's codes: `wrong_answer`, `margin_too_small`, `timeout`, `out_of_fuel`, `trapped`, `compile_error`, `guard_rejected`, `axiom_violation`, `type_mismatch`, `bound_not_improved`, `spec_altered`, `schema_error`, `size_limit`, `stale`, `fault`, `other`. The site stores any other well-formed code as `other`, so add a new code to `platform/src/lib/telemetry.ts` before a checker emits it. |
 | `reason` | `string` | Trusted checker summary only (`<= 200` sanitized ASCII chars, never echoed from untrusted user/candidate text). |
 | `resolution` | `string` | `""`, `"proved"`, `"disproved"`, or `"improved"`. |
 | `metric_value` | `number \| null` | Finite verified metric (required when `kind === "bound"` and `verdict === "ACCEPTED"`). |

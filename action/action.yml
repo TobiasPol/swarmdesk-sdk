@@ -182,7 +182,7 @@ runs:
         get_api "pulls/$PR" "$OUT_DIR/api/pr.json"
         get_api "pulls/$PR/files?per_page=100" "$OUT_DIR/api/files.json"
         head_sha=$(jq -r '.head.sha // ""' "$OUT_DIR/api/pr.json")
-        printf '%s' "$head_sha" | grep -Eqx '[0-9a-f]{40}' || emit_refusal "guard_refused" "the pull request has no head commit"
+        printf '%s' "$head_sha" | grep -Eqx '[0-9a-f]{40}' || emit_refusal "guard_rejected" "the pull request has no head commit"
         get_api "git/trees/$head_sha?recursive=1" "$OUT_DIR/api/tree.json"
         get_api "pulls/$PR/commits?per_page=5" "$OUT_DIR/api/commits.json"
 
@@ -194,7 +194,7 @@ runs:
         set -e
 
         if [ "$guard_rc" -ne 0 ]; then
-          emit_refusal "guard_refused" "$(jq -r '.refused // "the pull request was refused"' <<<"$guard_out")"
+          emit_refusal "guard_rejected" "$(jq -r '.refused // "the pull request was refused"' <<<"$guard_out")"
         fi
 
         target=$(jq -r .target <<<"$guard_out")
@@ -230,7 +230,7 @@ runs:
         limits_rc=$?
         set -e
         if [ "$limits_rc" -ne 0 ]; then
-          emit_refusal "rate_limited" "$(jq -r '.refused // "rate limit exceeded"' <<<"$limits_out")" "$meta"
+          emit_refusal "guard_rejected" "$(jq -r '.refused // "rate limit exceeded"' <<<"$limits_out")" "$meta"
         fi
 
         if [ -n "$SWARMDESK_URL" ]; then
@@ -246,7 +246,7 @@ runs:
           step_rc=$?
           set -e
           if [ "$step_rc" -ne 0 ]; then
-            emit_refusal "step_closed" "$(jq -r '.refused // "the step was refused"' <<<"$step_out")" "$meta"
+            emit_refusal "stale" "$(jq -r '.refused // "the step was refused"' <<<"$step_out")" "$meta"
           fi
         fi
 
@@ -302,7 +302,8 @@ runs:
 
         verdict=$(pick verdict 'ACCEPTED|REJECTED|FAULT|STALE')
         verdict="${verdict:-FAULT}"
-        reason_code=$(pick reason_code '[a-z0-9_]{2,40}')
+        # The site's list of reason codes (platform/src/lib/telemetry.ts); any other code is dropped here.
+        reason_code=$(pick reason_code 'wrong_answer|margin_too_small|timeout|out_of_fuel|trapped|compile_error|guard_rejected|axiom_violation|type_mismatch|bound_not_improved|spec_altered|schema_error|size_limit|stale|fault|other')
         reason=$(field reason | tr -cd '[:alnum:] .,:()<>_/`-' | cut -c1-200)
         head_sha=$(pick head_sha '[0-9a-f]{40}')
         target=$(pick target '[a-z0-9_]{1,48}')
@@ -357,12 +358,12 @@ runs:
               ;;
             1)
               verdict="STALE"
-              reason_code="target_moved"
+              reason_code="stale"
               reason="this target moved while your submission was checked"
               ;;
             *)
               verdict="FAULT"
-              reason_code="commit_failed"
+              reason_code="fault"
               reason="the verified submission could not be written to default branch"
               ;;
           esac

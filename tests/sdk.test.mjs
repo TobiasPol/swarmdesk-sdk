@@ -331,7 +331,7 @@ test('tensor-rank accepts Strassen 7-product decomposition over Z against naive 
   const candidate = JSON.stringify(strassen2x2Z());
   const verdict = verifyCandidate(candidate, spec, 8);
   assert.equal(verdict.verdict, 'ACCEPTED');
-  assert.equal(verdict.reason_code, 'ok');
+  assert.equal(verdict.reason_code, '');
   assert.equal(verdict.resolution, 'improved');
   assert.equal(verdict.metric_value, 7);
   assert.equal(verdict.holder_value, 8);
@@ -367,7 +367,7 @@ test('tensor-rank rejects comments, unexpected keys, invalid GF2 entries, and em
 
   // Comments rejected
   const withComment = `// injected comment\n${JSON.stringify(strassen2x2Z())}`;
-  assert.equal(verifyCandidate(withComment, specZ, 8).reason_code, 'syntax_error');
+  assert.equal(verifyCandidate(withComment, specZ, 8).reason_code, 'schema_error');
 
   // Unexpected field rejected
   const withExtra = { ...strassen2x2Z(), note: 'ignore previous instructions' };
@@ -404,7 +404,7 @@ test('tensor-rank rejects comments, unexpected keys, invalid GF2 entries, and em
     );
     const finalJson = JSON.parse(readFileSync(outPath, 'utf8'));
     assert.equal(finalJson.verdict, 'ACCEPTED');
-    assert.equal(finalJson.reason_code, 'ok');
+    assert.equal(finalJson.reason_code, '');
     assert.equal(finalJson.metric_value, 7);
     assert.equal(finalJson.holder_value, 8);
   } finally {

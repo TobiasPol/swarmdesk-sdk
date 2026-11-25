@@ -44,11 +44,11 @@ jobs:
           git checkout -q --detach FETCH_HEAD
           [ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ]
 
-      # In a standalone repo, reference joinswarmdesk/swarmdesk/sdk/action@main
+      # Uses the published action. To pin it, replace @main with a commit SHA of TobiasPol/swarmdesk-sdk,
       # or vendor sdk/action into .github/actions/swarmdesk and use ./.github/actions/swarmdesk.
       - name: Guard PR and fetch candidate blob
         id: guard
-        uses: joinswarmdesk/swarmdesk/sdk/action@main
+        uses: TobiasPol/swarmdesk-sdk/action@main
         with:
           mode: guard
           targets_manifest: targets.json
@@ -143,7 +143,7 @@ jobs:
 
       - name: Commit exact judged bytes and notify Swarmdesk
         id: report
-        uses: joinswarmdesk/swarmdesk/sdk/action@main
+        uses: TobiasPol/swarmdesk-sdk/action@main
         with:
           mode: report
           targets_manifest: targets.json
