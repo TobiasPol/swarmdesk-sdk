@@ -36,13 +36,21 @@ evaluated exactly over $\mathbb{Z}$ (using `BigInt`) or modulo $2$ over $\mathrm
 
 ## Local Verification
 
+Judge your working copy of one target against the record holder on the default branch, exactly
+as the deciding workflow does. It exits 0 only on `ACCEPTED`, which is what the
+[Swarmdesk CLI](https://www.npmjs.com/package/swarmdesk-cli)'s `check` and `submit` rely on:
+
+```bash
+./scripts/check.sh matmul_2x2_z
+```
+
 Check all baseline/holder targets:
 
 ```bash
 ./scripts/check.sh
 ```
 
-Test a candidate file against the current holder:
+Or call the verifier directly on any candidate file:
 
 ```bash
 node checker/verify.mjs verify \
@@ -54,6 +62,6 @@ node checker/verify.mjs verify \
 
 ## CI & Swarmdesk Integration
 
-`.github/workflows/deciding.yml` uses `sdk/action` in two isolated jobs:
+`.github/workflows/deciding.yml` uses `TobiasPol/swarmdesk-sdk/action` in two isolated jobs:
 1. **`judge`** (read-only, zero secrets): validates PR invariants via `mode: guard`, fetches the single modified blob by SHA without checking out the fork, and runs `checker/verify.mjs`.
 2. **`report`**: commits exact judged bytes via `mode: report` (`commit-exact-blob.sh`), posts the PR comment, and delivers an HMAC-SHA256 signed verdict (`send-verdict.sh`) to Swarmdesk.

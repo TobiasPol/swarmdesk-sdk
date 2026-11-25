@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { strassen2x2Z } from './fixtures.mjs';
 
 import {
   Refused,
@@ -103,55 +104,6 @@ function makeValidPrFixtures() {
     },
   ];
   return { pr, files, tree, commits };
-}
-
-function strassen2x2Z() {
-  // P0 = (A00 + A11)(B00 + B11)
-  // P1 = (A10 + A11)B00
-  // P2 = A00(B01 - B11)
-  // P3 = A11(B10 - B00)
-  // P4 = (A00 + A01)B11
-  // P5 = (A10 - A00)(B00 + B01)
-  // P6 = (A01 - A11)(B10 + B11)
-  // C00 = P0 + P3 - P4 + P6
-  // C01 = P2 + P4
-  // C10 = P1 + P3
-  // C11 = P0 - P1 + P2 + P5
-  return {
-    target: 'matmul_2x2_z',
-    ring: 'Z',
-    m: 2,
-    k: 2,
-    n: 2,
-    rank: 7,
-    u: [
-      [[1, 0], [0, 1]],
-      [[0, 0], [1, 1]],
-      [[1, 0], [0, 0]],
-      [[0, 0], [0, 1]],
-      [[1, 1], [0, 0]],
-      [[-1, 0], [1, 0]],
-      [[0, 1], [0, -1]],
-    ],
-    v: [
-      [[1, 0], [0, 1]],
-      [[1, 0], [0, 0]],
-      [[0, 1], [0, -1]],
-      [[-1, 0], [1, 0]],
-      [[0, 0], [0, 1]],
-      [[1, 1], [0, 0]],
-      [[0, 0], [1, 1]],
-    ],
-    w: [
-      [[1, 0], [0, 1]],
-      [[0, 0], [1, -1]],
-      [[0, 1], [0, 1]],
-      [[1, 0], [1, 0]],
-      [[-1, 1], [0, 0]],
-      [[0, 0], [0, 1]],
-      [[1, 0], [0, 0]],
-    ],
-  };
 }
 
 test('pr-guard accepts valid single-file PR and supports all target kinds', () => {
