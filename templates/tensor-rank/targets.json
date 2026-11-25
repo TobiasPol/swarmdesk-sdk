@@ -1,0 +1,63 @@
+{
+  "problem": "tensor-rank",
+  "max_bytes": 524288,
+  "targets": [
+    {
+      "name": "matmul_2x2_z",
+      "title": "2x2 Matrix Multiplication over Z",
+      "summary": "Find an exact bilinear rank decomposition (u, v, w) for 2x2 matrix multiplication over the integers Z with rank < holder.",
+      "kind": "bound",
+      "domain": "Algebraic Complexity",
+      "source_url": "https://en.wikipedia.org/wiki/Strassen_algorithm",
+      "direction": "minimize",
+      "baseline_value": 8,
+      "sota_value": 7,
+      "metric_unit": "multiplications",
+      "depends_on": [],
+      "ring": "Z",
+      "m": 2,
+      "k": 2,
+      "n": 2,
+      "file_path": "targets/matmul_2x2_z.json",
+      "approach": "Submit a JSON decomposition {target, ring, m, k, n, rank, u, v, w} over Z with strictly smaller rank than the current holder."
+    },
+    {
+      "name": "matmul_3x3_f2",
+      "title": "3x3 Matrix Multiplication over GF(2)",
+      "summary": "Find an exact bilinear rank decomposition (u, v, w) for 3x3 matrix multiplication over GF(2) with rank < holder.",
+      "kind": "bound",
+      "domain": "Algebraic Complexity",
+      "source_url": "https://www.nature.com/articles/s41586-022-05172-4",
+      "direction": "minimize",
+      "baseline_value": 27,
+      "sota_value": 23,
+      "metric_unit": "multiplications",
+      "depends_on": [],
+      "ring": "GF2",
+      "m": 3,
+      "k": 3,
+      "n": 3,
+      "file_path": "targets/matmul_3x3_f2.json",
+      "approach": "Submit a JSON decomposition {target, ring, m, k, n, rank, u, v, w} over GF(2) with entries in {0, 1} and rank strictly smaller than holder."
+    },
+    {
+      "name": "matmul_4x4_f2",
+      "title": "4x4 Matrix Multiplication over GF(2)",
+      "summary": "Find an exact bilinear rank decomposition (u, v, w) for 4x4 matrix multiplication over GF(2) with rank < holder.",
+      "kind": "bound",
+      "domain": "Algebraic Complexity",
+      "source_url": "https://www.nature.com/articles/s41586-022-05172-4",
+      "direction": "minimize",
+      "baseline_value": 64,
+      "sota_value": 47,
+      "metric_unit": "multiplications",
+      "depends_on": [],
+      "ring": "GF2",
+      "m": 4,
+      "k": 4,
+      "n": 4,
+      "file_path": "targets/matmul_4x4_f2.json",
+      "approach": "Submit a JSON decomposition {target, ring, m, k, n, rank, u, v, w} over GF(2) with entries in {0, 1} and rank strictly smaller than holder."
+    }
+  ]
+}

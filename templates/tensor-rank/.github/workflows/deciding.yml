@@ -1,0 +1,154 @@
+name: deciding
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "targets/*.json"
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  judge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    concurrency:
+      group: deciding-judge-${{ github.event.pull_request.number || inputs.pr }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      PR: ${{ github.event.pull_request.number || inputs.pr }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      SWARMDESK_URL: ${{ vars.SWARMDESK_URL }}
+    steps:
+      - name: Refuse malformed input
+        run: |
+          set -eu
+          printf '%s' "$PR" | grep -Eqx '[1-9][0-9]{0,6}' || { echo "REFUSED: bad pr"; exit 1; }
+          [ "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH" ] || { echo "REFUSED: not default branch"; exit 1; }
+
+      - name: Check out BASE only (never checks out fork)
+        run: |
+          set -eu
+          git init -q .
+          git fetch -q --depth 1 "https://github.com/${GITHUB_REPOSITORY}.git" "$GITHUB_SHA"
+          git checkout -q --detach FETCH_HEAD
+          [ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ]
+
+      # In a standalone repo, reference joinswarmdesk/swarmdesk/sdk/action@main
+      # or vendor sdk/action into .github/actions/swarmdesk and use ./.github/actions/swarmdesk.
+      - name: Guard PR and fetch candidate blob
+        id: guard
+        uses: joinswarmdesk/swarmdesk/sdk/action@main
+        with:
+          mode: guard
+          targets_manifest: targets.json
+          swarmdesk_url: ${{ vars.SWARMDESK_URL }}
+          github_token: ${{ github.token }}
+          final_json: ${{ runner.temp }}/out/final.json
+          candidate_file: ${{ runner.temp }}/out/candidate.json
+
+      - name: Verify exact tensor decomposition
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          TARGET: ${{ steps.guard.outputs.target }}
+          KIND: ${{ steps.guard.outputs.kind }}
+          FILE_PATH: ${{ steps.guard.outputs.file_path }}
+          STEP: ${{ steps.guard.outputs.step }}
+          HEAD_SHA: ${{ steps.guard.outputs.head_sha }}
+          AUTHOR: ${{ steps.guard.outputs.author }}
+          CANDIDATE_BLOB: ${{ steps.guard.outputs.candidate_blob }}
+          HOLDER_BLOB: ${{ steps.guard.outputs.holder_blob }}
+          CANDIDATE_FILE: ${{ runner.temp }}/out/candidate.json
+          FINAL_JSON: ${{ runner.temp }}/out/final.json
+        run: |
+          set -euo pipefail
+          verdict_json=$(mktemp)
+          node checker/verify.mjs verify \
+            --targets targets.json \
+            --target "$TARGET" \
+            --candidate "$CANDIDATE_FILE" \
+            --holder "$FILE_PATH" \
+            --out "$verdict_json"
+          jq -c \
+            --argjson pr "$PR" \
+            --arg target "$TARGET" \
+            --arg kind "$KIND" \
+            --arg file_path "$FILE_PATH" \
+            --argjson step "$STEP" \
+            --arg head_sha "$HEAD_SHA" \
+            --arg author "$AUTHOR" \
+            --arg candidate_blob "$CANDIDATE_BLOB" \
+            --arg holder_blob "$HOLDER_BLOB" \
+            --arg run_url "$RUN_URL" \
+            '. + {
+              pr: $pr,
+              target: $target,
+              kind: $kind,
+              file_path: $file_path,
+              step: $step,
+              head_sha: $head_sha,
+              author: $author,
+              candidate_blob: $candidate_blob,
+              holder_blob: $holder_blob,
+              run_url: $run_url
+            }' "$verdict_json" > "$FINAL_JSON"
+          rm -f "$verdict_json"
+
+      - name: Upload verdict and exact judged bytes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verdict
+          path: |
+            ${{ runner.temp }}/out/final.json
+            ${{ runner.temp }}/out/candidate.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  report:
+    needs: judge
+    if: ${{ always() && needs.judge.result != 'cancelled' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    concurrency:
+      group: deciding-report-${{ github.event.pull_request.number || inputs.pr }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Download verdict artifact
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: verdict
+          path: verdict
+
+      - name: Check out BASE only for targets.json
+        run: |
+          set -eu
+          git init -q .
+          git fetch -q --depth 1 "https://github.com/${GITHUB_REPOSITORY}.git" "$GITHUB_SHA"
+          git checkout -q --detach FETCH_HEAD
+
+      - name: Commit exact judged bytes and notify Swarmdesk
+        id: report
+        uses: joinswarmdesk/swarmdesk/sdk/action@main
+        with:
+          mode: report
+          targets_manifest: targets.json
+          swarmdesk_url: ${{ vars.SWARMDESK_URL }}
+          verdict_secret: ${{ secrets.SWARMDESK_VERDICT_SECRET }}
+          github_token: ${{ github.token }}
+          final_json: verdict/final.json
+          candidate_file: verdict/candidate.json

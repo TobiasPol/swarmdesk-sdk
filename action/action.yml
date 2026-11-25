@@ -1,0 +1,445 @@
+name: "Swarmdesk Problem Repo Action"
+description: "Reusable guard (untrusted PR validation + blob fetch) and report (exact-blob commit + signed verdict delivery) composite action for Swarmdesk problem repositories."
+
+inputs:
+  mode:
+    description: "Action mode: 'guard' (in judge job, zero secrets) or 'report' (in report job)"
+    required: true
+  problem:
+    description: "Swarmdesk problem slug (defaults to .problem in targets_manifest)"
+    required: false
+    default: ""
+  targets_manifest:
+    description: "Path to targets.json manifest in the BASE checkout"
+    required: false
+    default: "targets.json"
+  swarmdesk_url:
+    description: "Swarmdesk HTTPS base URL (e.g. https://joinswarmdesk.com)"
+    required: false
+    default: ""
+  verdict_secret:
+    description: "HMAC-SHA256 signing secret (report mode only; never pass in judge job)"
+    required: false
+    default: ""
+  github_token:
+    description: "GitHub token for API reads (guard) or Git Data API commits + comments (report)"
+    required: true
+  final_json:
+    description: "Path to final.json (written on guard refusal if set; read by report mode)"
+    required: false
+    default: ""
+  candidate_file:
+    description: "Path where guard writes exact candidate bytes or report reads exact judged bytes"
+    required: false
+    default: ""
+  target_file_path:
+    description: "Optional fallback file_path when committing exact judged bytes in report mode"
+    required: false
+    default: ""
+  pr_number:
+    description: "Pull request number (defaults to event PR number or workflow_dispatch input)"
+    required: false
+    default: ""
+  repo:
+    description: "owner/repo (defaults to github.repository)"
+    required: false
+    default: ""
+  default_branch:
+    description: "Default branch name (defaults to repository default_branch)"
+    required: false
+    default: ""
+  run_url:
+    description: "Workflow run URL for verdict provenance"
+    required: false
+    default: ""
+  out_dir:
+    description: "Working directory for GitHub API scratch responses in guard mode"
+    required: false
+    default: ""
+
+outputs:
+  ok:
+    description: "'true' if guard passed, 'false' if refused"
+    value: ${{ steps.guard.outputs.ok }}
+  refused:
+    description: "Sanitized refusal reason when guard returns ok=false"
+    value: ${{ steps.guard.outputs.refused }}
+  target:
+    description: "Matched target slug"
+    value: ${{ steps.guard.outputs.target }}
+  kind:
+    description: "Matched target kind (score|bound|conjecture|lemma|custom)"
+    value: ${{ steps.guard.outputs.kind }}
+  file_path:
+    description: "Matched target file_path"
+    value: ${{ steps.guard.outputs.file_path }}
+  step:
+    description: "Matched step ID"
+    value: ${{ steps.guard.outputs.step }}
+  head_sha:
+    description: "PR head commit SHA"
+    value: ${{ steps.guard.outputs.head_sha }}
+  candidate_blob:
+    description: "PR modified file Git blob SHA"
+    value: ${{ steps.guard.outputs.candidate_blob }}
+  holder_blob:
+    description: "BASE file Git blob SHA"
+    value: ${{ steps.guard.outputs.holder_blob }}
+  author:
+    description: "PR author GitHub login"
+    value: ${{ steps.guard.outputs.author }}
+  recorded:
+    description: "'true' when report mode recorded an ACCEPTED submission onto default_branch"
+    value: ${{ steps.report.outputs.recorded }}
+  verdict:
+    description: "Final verdict emitted by report mode (ACCEPTED|REJECTED|STALE|FAULT)"
+    value: ${{ steps.report.outputs.verdict }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Validate mode
+      shell: bash
+      env:
+        INPUT_MODE: ${{ inputs.mode }}
+      run: |
+        set -euo pipefail
+        case "$INPUT_MODE" in
+          guard|report) ;;
+          *) echo "invalid mode: expected guard or report" >&2; exit 2 ;;
+        esac
+
+    - name: Run PR guard and fetch judged candidate blob
+      id: guard
+      if: ${{ inputs.mode == 'guard' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        INPUT_PROBLEM: ${{ inputs.problem }}
+        MANIFEST: ${{ inputs.targets_manifest }}
+        SWARMDESK_URL: ${{ inputs.swarmdesk_url }}
+        FINAL_JSON: ${{ inputs.final_json }}
+        CANDIDATE_FILE: ${{ inputs.candidate_file }}
+        PR: ${{ inputs.pr_number || github.event.pull_request.number || github.event.inputs.pr }}
+        REPO: ${{ inputs.repo || github.repository }}
+        DEFAULT_BRANCH: ${{ inputs.default_branch || github.event.repository.default_branch || 'main' }}
+        RUN_URL: ${{ inputs.run_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
+        OUT_DIR: ${{ inputs.out_dir || format('{0}/swarmdesk-guard', runner.temp) }}
+      run: |
+        set -euo pipefail
+        API="https://api.github.com"
+        mkdir -p "$OUT_DIR/api"
+
+        emit_refusal() {
+          local code="$1" reason="$2" meta="${3:-{\}}"
+          local clean_reason
+          clean_reason=$(printf '%s' "$reason" | tr -cd '[:alnum:] .,:()<>_/`-' | cut -c1-200)
+          {
+            echo "ok=false"
+            echo "refused=$clean_reason"
+          } >> "$GITHUB_OUTPUT"
+          if [ -n "$FINAL_JSON" ]; then
+            mkdir -p "$(dirname "$FINAL_JSON")"
+            jq -cn --arg verdict "REJECTED" --arg code "$code" --arg reason "$clean_reason" \
+              --argjson pr "$PR" --arg run_url "$RUN_URL" --argjson more "$meta" \
+              '$more + {verdict: $verdict, reason_code: $code, reason: $reason, pr: $pr, run_url: $run_url}' \
+              > "$FINAL_JSON"
+          fi
+          exit 0
+        }
+
+        emit_fault() {
+          local code="$1" reason="$2" meta="${3:-{\}}"
+          local clean_reason
+          clean_reason=$(printf '%s' "$reason" | tr -cd '[:alnum:] .,:()<>_/`-' | cut -c1-200)
+          {
+            echo "ok=false"
+            echo "refused=$clean_reason"
+          } >> "$GITHUB_OUTPUT"
+          if [ -n "$FINAL_JSON" ]; then
+            mkdir -p "$(dirname "$FINAL_JSON")"
+            jq -cn --arg verdict "FAULT" --arg code "$code" --arg reason "$clean_reason" \
+              --argjson pr "$PR" --arg run_url "$RUN_URL" --argjson more "$meta" \
+              '$more + {verdict: $verdict, reason_code: $code, reason: $reason, pr: $pr, run_url: $run_url}' \
+              > "$FINAL_JSON"
+          fi
+          exit 0
+        }
+
+        printf '%s' "$PR" | grep -Eqx '[1-9][0-9]{0,6}' || { echo "bad pull request number" >&2; exit 2; }
+        [ -f "$MANIFEST" ] || { echo "missing targets manifest: $MANIFEST" >&2; exit 2; }
+
+        PROBLEM="${INPUT_PROBLEM:-$(jq -r '.problem // ""' "$MANIFEST")}"
+
+        get_api() {
+          curl -sSf --proto '=https' --max-redirs 0 --max-filesize 20000000 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: ${3:-application/vnd.github+json}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -o "$2" "$API/repos/$REPO/$1"
+        }
+
+        get_api "pulls/$PR" "$OUT_DIR/api/pr.json"
+        get_api "pulls/$PR/files?per_page=100" "$OUT_DIR/api/files.json"
+        head_sha=$(jq -r '.head.sha // ""' "$OUT_DIR/api/pr.json")
+        printf '%s' "$head_sha" | grep -Eqx '[0-9a-f]{40}' || emit_refusal "guard_refused" "the pull request has no head commit"
+        get_api "git/trees/$head_sha?recursive=1" "$OUT_DIR/api/tree.json"
+        get_api "pulls/$PR/commits?per_page=5" "$OUT_DIR/api/commits.json"
+
+        set +e
+        guard_out=$(node "$GITHUB_ACTION_PATH/pr-guard.mjs" pr \
+          "$OUT_DIR/api/pr.json" "$OUT_DIR/api/files.json" "$OUT_DIR/api/tree.json" \
+          "$OUT_DIR/api/commits.json" "$MANIFEST" "$REPO" "$DEFAULT_BRANCH")
+        guard_rc=$?
+        set -e
+
+        if [ "$guard_rc" -ne 0 ]; then
+          emit_refusal "guard_refused" "$(jq -r '.refused // "the pull request was refused"' <<<"$guard_out")"
+        fi
+
+        target=$(jq -r .target <<<"$guard_out")
+        kind=$(jq -r .kind <<<"$guard_out")
+        file_path=$(jq -r .file_path <<<"$guard_out")
+        step=$(jq -r .step <<<"$guard_out")
+        blob=$(jq -r .blob <<<"$guard_out")
+        author=$(jq -r .author <<<"$guard_out")
+        holder_blob=$(git hash-object "$file_path")
+
+        meta=$(jq -cn --arg holder "$holder_blob" --argjson g "$guard_out" \
+          '{target: $g.target, kind: $g.kind, file_path: $g.file_path, step: $g.step,
+            head_sha: $g.head, author: $g.author, candidate_blob: $g.blob, holder_blob: $holder}')
+
+        curl -sSf --proto '=https' --max-redirs 0 --max-filesize 2000000 \
+          -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" -o "$OUT_DIR/api/mine.json" \
+          "$API/search/issues?q=repo:$REPO+is:pr+is:open+author:$author&per_page=1"
+
+        total_comments=$(jq -r '.comments // 0 | if type == "number" then . else 0 end' "$OUT_DIR/api/pr.json")
+        last_page=$(( (total_comments + 99) / 100 ))
+        [ "$last_page" -ge 1 ] || last_page=1
+        first_page=$(( last_page > 10 ? last_page - 9 : 1 ))
+        pages=()
+        for page in $(seq "$first_page" "$last_page"); do
+          get_api "issues/$PR/comments?per_page=100&page=$page" "$OUT_DIR/api/comments-$page.json"
+          pages+=("$OUT_DIR/api/comments-$page.json")
+        done
+        jq -s add "${pages[@]}" > "$OUT_DIR/api/comments.json"
+
+        set +e
+        limits_out=$(node "$GITHUB_ACTION_PATH/pr-guard.mjs" limits "$OUT_DIR/api/mine.json" "$OUT_DIR/api/comments.json")
+        limits_rc=$?
+        set -e
+        if [ "$limits_rc" -ne 0 ]; then
+          emit_refusal "rate_limited" "$(jq -r '.refused // "rate limit exceeded"' <<<"$limits_out")" "$meta"
+        fi
+
+        if [ -n "$SWARMDESK_URL" ]; then
+          base_url="${SWARMDESK_URL%/}"
+          printf '%s' "$base_url" | grep -Eqx 'https://[a-z0-9.-]+(:[0-9]{1,5})?' || emit_fault "fault" "bad desk address" "$meta"
+          [ -n "$PROBLEM" ] || emit_fault "fault" "missing problem slug for desk step check" "$meta"
+          if ! curl -sSf --proto '=https' --max-redirs 0 --max-time 20 \
+            -o "$OUT_DIR/api/steps.json" "${base_url}/p/${PROBLEM}/steps.json"; then
+            emit_fault "fault" "the desk could not be reached" "$meta"
+          fi
+          set +e
+          step_out=$(node "$GITHUB_ACTION_PATH/pr-guard.mjs" step "$OUT_DIR/api/steps.json" "$step" "$target" "$MANIFEST")
+          step_rc=$?
+          set -e
+          if [ "$step_rc" -ne 0 ]; then
+            emit_refusal "step_closed" "$(jq -r '.refused // "the step was refused"' <<<"$step_out")" "$meta"
+          fi
+        fi
+
+        dest="${CANDIDATE_FILE:-$OUT_DIR/candidate.bin}"
+        mkdir -p "$(dirname "$dest")"
+        get_api "git/blobs/$blob" "$dest" "application/vnd.github.raw"
+        if [ "$(git hash-object "$dest")" != "$blob" ]; then
+          emit_fault "fault" "the file that arrived is not the file of the pull request" "$meta"
+        fi
+
+        {
+          echo "ok=true"
+          echo "refused="
+          echo "target=$target"
+          echo "kind=$kind"
+          echo "file_path=$file_path"
+          echo "step=$step"
+          echo "head_sha=$head_sha"
+          echo "candidate_blob=$blob"
+          echo "holder_blob=$holder_blob"
+          echo "author=$author"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Report verdict, commit exact judged bytes on ACCEPTED, and notify Swarmdesk
+      id: report
+      if: ${{ inputs.mode == 'report' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        INPUT_PROBLEM: ${{ inputs.problem }}
+        MANIFEST: ${{ inputs.targets_manifest }}
+        SWARMDESK_URL: ${{ inputs.swarmdesk_url }}
+        VERDICT_SECRET: ${{ inputs.verdict_secret }}
+        FINAL_JSON: ${{ inputs.final_json }}
+        CANDIDATE_FILE: ${{ inputs.candidate_file }}
+        TARGET_FILE_PATH: ${{ inputs.target_file_path }}
+        PR: ${{ inputs.pr_number || github.event.pull_request.number || github.event.inputs.pr }}
+        REPO: ${{ inputs.repo || github.repository }}
+        DEFAULT_BRANCH: ${{ inputs.default_branch || github.event.repository.default_branch || 'main' }}
+      run: |
+        set -euo pipefail
+        printf '%s' "$PR" | grep -Eqx '[1-9][0-9]{0,6}' || { echo "bad pull request number" >&2; exit 2; }
+        [ -n "$FINAL_JSON" ] || { echo "final_json input is required in report mode" >&2; exit 2; }
+
+        work_final="$FINAL_JSON"
+        if [ ! -s "$work_final" ]; then
+          work_final=$(mktemp)
+          echo '{"verdict":"FAULT","reason_code":"fault","reason":"the check produced no verdict"}' > "$work_final"
+        fi
+
+        field() { jq -r --arg k "$1" '.[$k] // "" | tostring' "$work_final"; }
+        pick() { field "$1" | grep -Ex "$2" || true; }
+
+        verdict=$(pick verdict 'ACCEPTED|REJECTED|FAULT|STALE')
+        verdict="${verdict:-FAULT}"
+        reason_code=$(pick reason_code '[a-z0-9_]{2,40}')
+        reason=$(field reason | tr -cd '[:alnum:] .,:()<>_/`-' | cut -c1-200)
+        head_sha=$(pick head_sha '[0-9a-f]{40}')
+        target=$(pick target '[a-z0-9_]{1,48}')
+        kind=$(pick kind 'score|bound|conjecture|lemma|custom')
+        file_path=$(field file_path)
+        [ -n "$file_path" ] || file_path="$TARGET_FILE_PATH"
+        step=$(pick step '[1-9][0-9]{0,8}')
+        author=$(pick author '[A-Za-z0-9][A-Za-z0-9-]{0,38}')
+        resolution=$(pick resolution 'proved|disproved|improved')
+        metric_val=$(jq -c '.metric_value // null | if type == "number" then . else null end' "$work_final")
+        holder_val=$(jq -c '.holder_value // null | if type == "number" then . else null end' "$work_final")
+        proof_lines=$(pick proof_lines '[0-9]{1,6}')
+        wasm_bytes=$(pick wasm_bytes '[0-9]{1,9}')
+        candidate_fuel=$(pick candidate_fuel '[0-9]{1,12}')
+        holder_fuel=$(pick holder_fuel '[0-9]{1,12}')
+        seed=$(pick seed '[A-Za-z0-9_-]{1,32}')
+        agent_harness=$(pick agent_harness '[a-z0-9_-]{1,32}')
+        agent_model=$(pick agent_model '[A-Za-z0-9._:/-]{1,64}')
+        class_fuel=$(jq -c '.class_fuel // "" | if type == "object" then tojson elif type == "string" then . else "" end' "$work_final")
+        candidate_blob=$(pick candidate_blob '[0-9a-f]{40}')
+        holder_blob=$(pick holder_blob '[0-9a-f]{40}')
+        run_url=$(pick run_url "https://github\.com/$REPO/actions/runs/[0-9]+")
+
+        problem="$INPUT_PROBLEM"
+        if [ -z "$problem" ] && [ -f "$MANIFEST" ]; then
+          problem=$(jq -r '.problem // ""' "$MANIFEST")
+        fi
+
+        merged=false
+        repeat=false
+        record_sha=""
+
+        if [ "$verdict" = "ACCEPTED" ] && [ -n "$head_sha" ] && [ -n "$target" ] && [ -n "$file_path" ] && [ -n "$step" ] && [ -n "$author" ]; then
+          outcome=2
+          if [ -n "$candidate_blob" ] && [ -n "$holder_blob" ] && [ -n "$CANDIDATE_FILE" ] && [ -s "$CANDIDATE_FILE" ]; then
+            set +e
+            commit_out=$(
+              REPO="$REPO" DEFAULT_BRANCH="$DEFAULT_BRANCH" GH_TOKEN="$GH_TOKEN" \
+              FILE_PATH="$file_path" CANDIDATE_FILE="$CANDIDATE_FILE" \
+              CANDIDATE_BLOB="$candidate_blob" HOLDER_BLOB="$holder_blob" \
+              PR="$PR" HEAD_SHA="$head_sha" STEP="$step" TARGET="$target" AUTHOR="$author" \
+              bash "$GITHUB_ACTION_PATH/commit-exact-blob.sh"
+            )
+            outcome=$?
+            set -e
+          fi
+          case "$outcome" in
+            0)
+              merged=true
+              repeat=$(jq -r '.repeat // false' <<<"$commit_out")
+              record_sha=$(jq -r '.record_sha // ""' <<<"$commit_out")
+              ;;
+            1)
+              verdict="STALE"
+              reason_code="target_moved"
+              reason="this target moved while your submission was checked"
+              ;;
+            *)
+              verdict="FAULT"
+              reason_code="commit_failed"
+              reason="the verified submission could not be written to default branch"
+              ;;
+          esac
+        fi
+
+        line="**$verdict**"
+        [ -n "$reason" ] && line="$line ($reason)"
+        body="$line"
+        [ -n "$target" ] && body="$body"$'\n\n'"Target \`$target\` ($kind), step-$step."
+        [ -n "$metric_val" ] && [ "$metric_val" != "null" ] && body="$body"$'\n'"Verified metric: \`$metric_val\` (previous: \`$holder_val\`)."
+        if [ "$merged" = true ]; then
+          body="$body"$'\n\n'"Verified bytes committed directly to \`$DEFAULT_BRANCH\` (commit $record_sha). Pull request closed without three-way merge."
+        fi
+        [ -n "$run_url" ] && body="$body"$'\n\n'"[The run]($run_url)"
+
+        if [ "$repeat" != true ]; then
+          gh api -H "X-GitHub-Api-Version: 2022-11-28" -X POST "repos/$REPO/issues/$PR/comments" -f body="$body" >/dev/null
+        fi
+        if [ "$merged" = true ]; then
+          gh api -H "X-GitHub-Api-Version: 2022-11-28" -X PATCH "repos/$REPO/pulls/$PR" -f state=closed >/dev/null 2>&1 || true
+        fi
+
+        {
+          echo "recorded=$([ -n "$record_sha" ] && echo true || echo false)"
+          echo "verdict=$verdict"
+        } >> "$GITHUB_OUTPUT"
+
+        if [ -n "$SWARMDESK_URL" ] && [ -n "$VERDICT_SECRET" ] && [ -n "$problem" ] && [ -n "$author" ] && [ -n "$head_sha" ]; then
+          payload=$(mktemp)
+          jq -cn \
+            --arg problem "$problem" \
+            --argjson pr "$PR" \
+            --arg head_sha "$head_sha" \
+            --arg author "$author" \
+            --arg step "$step" \
+            --arg target "$target" \
+            --arg verdict "$verdict" \
+            --arg reason_code "$reason_code" \
+            --arg reason "$reason" \
+            --arg resolution "$resolution" \
+            --argjson metric "$metric_val" \
+            --argjson holder "$holder_val" \
+            --arg lines "${proof_lines:-0}" \
+            --arg wasm "${wasm_bytes:-0}" \
+            --arg cfuel "${candidate_fuel:-0}" \
+            --arg hfuel "${holder_fuel:-0}" \
+            --arg seed "$seed" \
+            --arg class_fuel "$class_fuel" \
+            --arg harness "$agent_harness" \
+            --arg model "$agent_model" \
+            --argjson merged "$merged" \
+            --arg run_url "$run_url" \
+            '{
+              problem: $problem,
+              pr: $pr,
+              head_sha: $head_sha,
+              author: $author,
+              step: ($step | tonumber? // null),
+              target: $target,
+              verdict: $verdict,
+              reason_code: $reason_code,
+              reason: $reason,
+              resolution: $resolution,
+              metric_value: $metric,
+              holder_value: $holder,
+              proof_lines: ($lines | tonumber? // 0),
+              wasm_bytes: ($wasm | tonumber? // 0),
+              candidate_fuel: ($cfuel | tonumber? // 0),
+              holder_fuel: ($hfuel | tonumber? // 0),
+              seed: $seed,
+              class_fuel: $class_fuel,
+              agent_harness: $harness,
+              agent_model: $model,
+              merged: $merged,
+              run_url: $run_url
+            }' > "$payload"
+          SWARMDESK_URL="$SWARMDESK_URL" VERDICT_SECRET="$VERDICT_SECRET" \
+            bash "$GITHUB_ACTION_PATH/send-verdict.sh" "$payload" /api/verdicts
+          rm -f "$payload"
+        fi
