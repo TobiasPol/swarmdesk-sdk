@@ -113,7 +113,7 @@ function request({ child, state }, limits, inputs, timeoutMs) {
 export function startSandbox({ source, exportName, ...overrides }) {
   if (!sandboxSupported()) {
     const reason = 'this Node has no --allow-net permission flag; the sandbox cannot deny network access';
-    return { run: async () => failure('fault', reason), pause() {}, resume() {}, close() {} };
+    return { run: async () => failure('fault', reason), close() {} };
   }
   const limits = { ...SANDBOX_DEFAULTS, ...overrides };
   const dir = mkdtempSync(join(realpathSync(tmpdir()), 'swarmdesk-sandbox-'));
@@ -122,13 +122,6 @@ export function startSandbox({ source, exportName, ...overrides }) {
   const proc = spawnChild({ dir, modulePath, exportName, maxOldSpaceMb: limits.maxOldSpaceMb });
   return {
     run: (inputs, timeoutMs = limits.timeoutMs) => request(proc, limits, inputs, timeoutMs),
-    // Freeze and thaw the child, so an idle side cannot use CPU while the other side is timed.
-    pause() {
-      if (!proc.state.exited) proc.child.kill('SIGSTOP');
-    },
-    resume() {
-      if (!proc.state.exited) proc.child.kill('SIGCONT');
-    },
     close() {
       if (!proc.state.exited) proc.child.kill('SIGKILL');
       rmSync(dir, { recursive: true, force: true });

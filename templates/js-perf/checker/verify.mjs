@@ -8,13 +8,13 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildDataset, buildFreshDataset, deriveSeed, GOLDEN_SEED } from './dataset.mjs';
-import { startSandbox, withSandbox } from './sandbox.mjs';
+import { withSandbox } from './sandbox.mjs';
 
 export const DEFAULT_MAX_BYTES = 65536;
 const MIN_IMPROVEMENT_RATIO = 0.05;
-const PAIRS = 4;
-const WARMUP_ROUNDS = 3;
-const BENCH_ROUNDS = 6;
+const PAIRS = 8;
+const WARMUP_ROUNDS = 5;
+const BENCH_ROUNDS = 4;
 const MIN_WIN_RATIO = 0.75;
 const ROUND_SIZE = 4800;
 
@@ -106,53 +106,43 @@ async function checkEquivalence(box, refFn, seed) {
   return runChecked(box, fresh, fresh.map(refFn), 'fresh');
 }
 
-// Times one round on `active` while `idle` is frozen (SIGSTOP), so the side that is not being timed
-// cannot use CPU, whatever it runs between requests.
-function timedRound(active, idle, round, label) {
-  idle.pause();
-  active.resume();
-  return runChecked(active, round.data, round.expected, label);
+// Runs every round of one side in its own sandbox, one request per round (warm-up included), and
+// returns the parent-measured time of each. The other side is not alive at the same time, so a
+// candidate cannot disturb the holder's timing.
+function timeSide({ source, rounds, refFn, seed, check }) {
+  return withSandbox({ source, exportName: 'jsonEscape' }, async (box) => {
+    if (check) {
+      const eq = await checkEquivalence(box, refFn, seed);
+      if (!eq.ok) return eq;
+    }
+    const times = [];
+    for (let r = 0; r < rounds.length; r += 1) {
+      const res = await runChecked(box, rounds[r].data, rounds[r].expected, `round ${r}`);
+      if (!res.ok) return res;
+      times.push(res.elapsedNs);
+    }
+    return { ok: true, times: times.slice(WARMUP_ROUNDS) };
+  });
 }
 
 // Two fresh processes can differ by a few percent for identical code (JIT and heap layout), so the
-// benchmark is repeated in PAIRS independent process pairs and pooled. Within a pair the sides
-// alternate round by round, and which side goes first alternates too, so drift in machine load hits
-// both sides alike. Round k of both sides uses the same, never-reused dataset.
-async function timePair({ holderSource, candSource, refFn, seed, p }) {
-  const boxes = {
-    holder: startSandbox({ source: holderSource, exportName: 'jsonEscape' }),
-    cand: startSandbox({ source: candSource, exportName: 'jsonEscape' }),
-  };
-  try {
-    for (const side of p === 0 ? ['holder', 'cand'] : []) {
-      const eq = await checkEquivalence(boxes[side], refFn, seed);
-      if (!eq.ok) return { ...eq, side };
-    }
-    const times = { holder: [], cand: [] };
-    for (let r = 0; r < WARMUP_ROUNDS + BENCH_ROUNDS; r += 1) {
-      const data = buildFreshDataset(deriveSeed(seed, 'round', p, r), ROUND_SIZE);
-      const round = { data, expected: data.map(refFn) };
-      for (const side of (p + r) % 2 === 0 ? ['holder', 'cand'] : ['cand', 'holder']) {
-        const idle = boxes[side === 'holder' ? 'cand' : 'holder'];
-        const res = await timedRound(boxes[side], idle, round, `round ${r}`);
-        if (!res.ok) return { ...res, side };
-        times[side].push(res.elapsedNs);
-      }
-    }
-    const skip = (xs) => xs.slice(WARMUP_ROUNDS);
-    return { ok: true, holderTimes: skip(times.holder), candTimes: skip(times.cand) };
-  } finally {
-    boxes.holder.close();
-    boxes.cand.close();
-  }
-}
-
+// benchmark is repeated in PAIRS independent process pairs, alternating which side runs first, and the
+// results are pooled. Round k of the holder and of the candidate use the same, never-reused, dataset.
 async function benchmark({ holderSource, candSource, refFn, seed }) {
   const pairs = [];
   for (let p = 0; p < PAIRS; p += 1) {
-    const pair = await timePair({ holderSource, candSource, refFn, seed, p });
-    if (!pair.ok) return pair;
-    pairs.push({ holderTimes: pair.holderTimes, candTimes: pair.candTimes });
+    const rounds = [];
+    for (let r = 0; r < WARMUP_ROUNDS + BENCH_ROUNDS; r += 1) {
+      const data = buildFreshDataset(deriveSeed(seed, 'round', p, r), ROUND_SIZE);
+      rounds.push({ data, expected: data.map(refFn) });
+    }
+    const out = {};
+    for (const side of p % 2 === 0 ? ['holder', 'cand'] : ['cand', 'holder']) {
+      const source = side === 'holder' ? holderSource : candSource;
+      out[side] = await timeSide({ source, rounds, refFn, seed, check: p === 0 });
+      if (!out[side].ok) return { ...out[side], side };
+    }
+    pairs.push({ holderTimes: out.holder.times, candTimes: out.cand.times });
   }
   return { ok: true, pairs };
 }
@@ -183,7 +173,7 @@ export async function verifyCandidateFiles({
   return scoreVerdict({ raw, pairs: bench.pairs, fuel });
 }
 
-// Gain = mean over process pairs of (1 - median of that pair's per-round candidate/holder ratios).
+// Gain = median over process pairs of (1 - median of that pair's per-round candidate/holder ratios).
 // The candidate must also win at least MIN_WIN_RATIO of all paired rounds.
 function scoreVerdict({ raw, pairs, fuel }) {
   const holderTimes = pairs.flatMap((p) => p.holderTimes);
@@ -191,7 +181,8 @@ function scoreVerdict({ raw, pairs, fuel }) {
   const holderScore = Math.max(1, Math.round(median(holderTimes) / 1000));
   const candScore = Math.max(1, Math.round(median(candTimes) / 1000));
   const pairGains = pairs.map((p) => 1 - median(p.candTimes.map((t, i) => t / p.holderTimes[i])));
-  const gain = pairGains.reduce((a, b) => a + b, 0) / pairGains.length;
+  // Median, not mean: one pair hit by a burst of load on a shared runner cannot swing the verdict.
+  const gain = median(pairGains);
   const ratios = candTimes.map((t, i) => t / holderTimes[i]);
   const wins = ratios.filter((x) => x < 1).length;
   if (gain < MIN_IMPROVEMENT_RATIO || wins < Math.ceil(MIN_WIN_RATIO * ratios.length)) {

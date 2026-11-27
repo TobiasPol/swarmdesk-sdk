@@ -152,8 +152,8 @@ export function probe(x) {
   assert.deepEqual(res.results[3].value, { model: 'later', input: 'b' });
 });
 
-// Documents a known limit: the permission model does not cover signals to same-user processes. js-perf
-// therefore freezes the side that is not being timed, and a holder that dies fails the run closed.
+// Documents a known limit: the permission model does not cover signals to same-user processes, which
+// is why js-perf never keeps holder and candidate alive at the same time.
 test('limit: a sandboxed candidate can still signal other processes of the same user', async () => {
   const victim = spawn('sleep', ['30'], { stdio: 'ignore' });
   try {
