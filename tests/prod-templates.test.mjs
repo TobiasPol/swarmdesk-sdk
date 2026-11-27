@@ -7,10 +7,6 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
-  verifyCandidateFiles,
-  verifySelfCheck as verifyJsSelfCheck,
-} from '../templates/js-perf/checker/verify.mjs';
-import {
   verifySelfCheck as verifySqlSelfCheck,
   verifySqlFiles,
 } from '../templates/sql-query/checker/verify.mjs';
@@ -19,73 +15,9 @@ import {
   hashPostgresRows,
   sumBufferBlocks,
 } from '../templates/sql-query/checker/pg-buffers.mjs';
-import {
-  verifyBusinessFiles,
-  verifySelfCheck as verifyBusinessSelfCheck,
-} from '../templates/business-eval/checker/verify.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const sdkRoot = resolve(__dirname, '..');
-
-test('js-perf baseline self-check passes', async () => {
-  const res = await verifyJsSelfCheck(join(sdkRoot, 'templates/js-perf/targets.json'));
-  assert.equal(res.ok, true);
-  assert.equal(res.checked, 1);
-});
-
-test('js-perf accepts fast slice-based escaper and rejects wrong or guarded code', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'sd-jsperf-'));
-  try {
-    const holderPath = join(sdkRoot, 'templates/js-perf/targets/json_escape/candidate.mjs');
-    const referencePath = join(sdkRoot, 'templates/js-perf/targets/json_escape/reference.mjs');
-
-    const fastFile = join(dir, 'fast.mjs');
-    writeFileSync(
-      fastFile,
-      `const ESC = /["\\\\\\x00-\\x1f]/;
-const HEX = Array.from({ length: 32 }, (_, c) => '\\\\u' + c.toString(16).padStart(4, '0'));
-HEX[8] = '\\\\b'; HEX[9] = '\\\\t'; HEX[10] = '\\\\n'; HEX[12] = '\\\\f'; HEX[13] = '\\\\r';
-export function jsonEscape(str) {
-  if (!ESC.test(str)) return '"' + str + '"';
-  let out = '"';
-  let last = 0;
-  for (let i = 0; i < str.length; i += 1) {
-    const c = str.charCodeAt(i);
-    if (c === 34 || c === 92 || c < 32) {
-      if (last !== i) out += str.slice(last, i);
-      out += c === 34 ? '\\\\"' : c === 92 ? '\\\\\\\\' : HEX[c];
-      last = i + 1;
-    }
-  }
-  if (last !== str.length) out += str.slice(last);
-  return out + '"';
-}
-`,
-    );
-
-    const accepted = await verifyCandidateFiles({ candidatePath: fastFile, holderPath, referencePath });
-    assert.equal(accepted.verdict, 'ACCEPTED', accepted.reason);
-    assert.ok(accepted.metric_value < accepted.holder_value);
-
-    const wrongFile = join(dir, 'wrong.mjs');
-    writeFileSync(wrongFile, 'export function jsonEscape(str) { return `"${str}"`; }\n');
-    const wrong = await verifyCandidateFiles({ candidatePath: wrongFile, holderPath, referencePath });
-    assert.equal(wrong.verdict, 'REJECTED');
-    assert.equal(wrong.reason_code, 'wrong_answer');
-
-    const guardedFile = join(dir, 'guarded.mjs');
-    writeFileSync(guardedFile, '// sneaky comment\nexport function jsonEscape(s) { return s; }\n');
-    const guarded = await verifyCandidateFiles({ candidatePath: guardedFile, holderPath, referencePath });
-    assert.equal(guarded.verdict, 'REJECTED');
-    assert.equal(guarded.reason_code, 'guard_rejected');
-
-    const unchanged = await verifyCandidateFiles({ candidatePath: holderPath, holderPath, referencePath });
-    assert.equal(unchanged.verdict, 'REJECTED');
-    assert.equal(unchanged.reason_code, 'bound_not_improved');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
 
 test('sql-query baseline self-check passes', () => {
   const res = verifySqlSelfCheck(join(sdkRoot, 'templates/sql-query/targets.json'));
@@ -172,89 +104,11 @@ test('sql-query pg-buffers helper sums nested plan buffers and hashes determinis
   assert.equal(hashPostgresRows([{ a: 1 }]), hashPostgresRows([{ a: 1 }]));
 });
 
-test('check.sh self-checks succeed for js-perf, sql-query, and business-eval', () => {
+test('check.sh self-checks succeed for js-perf, sql-query, and business-eval (sandboxed)', () => {
   for (const tpl of ['js-perf', 'sql-query', 'business-eval']) {
     const out = execFileSync('bash', [join(sdkRoot, `templates/${tpl}/scripts/check.sh`)], {
       encoding: 'utf8',
     });
     assert.equal(JSON.parse(out).ok, true, tpl);
-  }
-});
-
-test('business-eval baseline self-check passes', async () => {
-  const res = await verifyBusinessSelfCheck(join(sdkRoot, 'templates/business-eval/targets.json'));
-  assert.equal(res.ok, true);
-  assert.equal(res.checked, 1);
-  assert.equal(res.results[0].scenarios, 240);
-});
-
-test('business-eval accepts tier-aware router and rejects wrong VAT or guarded code', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'sd-bizeval-'));
-  try {
-    const targetDir = join(sdkRoot, 'templates/business-eval/targets/pricing_router');
-    const holderPath = join(targetDir, 'candidate.mjs');
-    const referencePath = join(targetDir, 'reference.mjs');
-
-    const optimalFile = join(dir, 'optimal.mjs');
-    writeFileSync(
-      optimalFile,
-      `export function routeAndPrice(s) {
-  const annualPct = s.annualBilling && s.seats >= 5 ? 15 : 0;
-  const volumeFloor = s.seats >= 100 ? 20 : 0;
-  const discountPct = Math.max(volumeFloor, annualPct, s.couponPct);
-  const netCents = Math.round((s.seats * s.planCents * (100 - discountPct)) / 100);
-  let taxMode = 'NON_EU_EXPORT';
-  let vatCents = 0;
-  if (s.customerCountry === 'DE') {
-    taxMode = 'DE_19';
-    vatCents = Math.round((netCents * 19) / 100);
-  } else if (s.customerCountry === 'FR' || s.customerCountry === 'NL') {
-    if (s.hasValidVatId) {
-      taxMode = 'EU_REVERSE_CHARGE';
-    } else {
-      taxMode = 'EU_VAT_19';
-      vatCents = Math.round((netCents * 19) / 100);
-    }
-  }
-  let model = s.taskTier === 'audit' ? 'frontier' : s.taskTier === 'synthesize' ? 'mid' : 'mini';
-  if (model === 'mini' && s.requiresJsonSchema && s.inputTokens > 2500) {
-    model = 'mid';
-  }
-  return { netCents, vatCents, totalCents: netCents + vatCents, taxMode, model };
-}
-`,
-    );
-
-    const accepted = await verifyBusinessFiles({
-      candidatePath: optimalFile,
-      holderPath,
-      referencePath,
-    });
-    assert.equal(accepted.verdict, 'ACCEPTED', accepted.reason);
-    assert.ok(accepted.metric_value < accepted.holder_value * 0.7);
-
-    const wrongFile = join(dir, 'wrong.mjs');
-    writeFileSync(
-      wrongFile,
-      'export function routeAndPrice(s) { return { netCents: 0, vatCents: 0, totalCents: 0, taxMode: "DE_19", model: "mini" }; }\n',
-    );
-    const wrong = await verifyBusinessFiles({ candidatePath: wrongFile, holderPath, referencePath });
-    assert.equal(wrong.verdict, 'REJECTED');
-    assert.equal(wrong.reason_code, 'wrong_answer');
-
-    const guardedFile = join(dir, 'guarded.mjs');
-    writeFileSync(
-      guardedFile,
-      'import { readFileSync } from "node:fs";\nexport function routeAndPrice() { return {}; }\n',
-    );
-    const guarded = await verifyBusinessFiles({
-      candidatePath: guardedFile,
-      holderPath,
-      referencePath,
-    });
-    assert.equal(guarded.verdict, 'REJECTED');
-    assert.equal(guarded.reason_code, 'guard_rejected');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
   }
 });

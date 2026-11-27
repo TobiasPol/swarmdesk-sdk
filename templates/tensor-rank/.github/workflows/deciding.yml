@@ -44,11 +44,12 @@ jobs:
           git checkout -q --detach FETCH_HEAD
           [ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ]
 
-      # Uses the published action. To pin it, replace @main with a commit SHA of TobiasPol/swarmdesk-sdk,
+      # Uses the published action, pinned to a commit SHA because this workflow runs on pull_request_target.
+      # To update the pin, use a newer commit of TobiasPol/swarmdesk-sdk,
       # or vendor sdk/action into .github/actions/swarmdesk and use ./.github/actions/swarmdesk.
       - name: Guard PR and fetch candidate blob
         id: guard
-        uses: TobiasPol/swarmdesk-sdk/action@main
+        uses: TobiasPol/swarmdesk-sdk/action@8f7ce3c8fc9c3d5b2b82e31be39c9971600a267c # main
         with:
           mode: guard
           targets_manifest: targets.json
@@ -106,7 +107,7 @@ jobs:
 
       - name: Upload verdict and exact judged bytes
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: verdict
           path: |
@@ -129,7 +130,7 @@ jobs:
     steps:
       - name: Download verdict artifact
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: verdict
           path: verdict
@@ -143,7 +144,7 @@ jobs:
 
       - name: Commit exact judged bytes and notify Swarmdesk
         id: report
-        uses: TobiasPol/swarmdesk-sdk/action@main
+        uses: TobiasPol/swarmdesk-sdk/action@8f7ce3c8fc9c3d5b2b82e31be39c9971600a267c # main
         with:
           mode: report
           targets_manifest: targets.json

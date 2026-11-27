@@ -5,17 +5,17 @@
     {
       "name": "json_escape",
       "title": "Fast JSON string escaper (JS)",
-      "summary": "Optimize jsonEscape(str) in plain ESM JavaScript for minimum execution cost while preserving exact RFC 8259 string escaping on all UTF-16 inputs.",
+      "summary": "Optimize jsonEscape(str) in plain ESM JavaScript for minimum execution time per 4,800-string round while preserving exact RFC 8259 string escaping on well-formed UTF-16 inputs.",
       "kind": "bound",
       "domain": "Serialization & Parsers",
       "source_url": "https://datatracker.ietf.org/doc/html/rfc8259#section-7",
       "direction": "minimize",
-      "baseline_value": 100000,
-      "sota_value": 10000,
-      "metric_unit": "ops",
+      "baseline_value": 18000,
+      "sota_value": 7000,
+      "metric_unit": "us_per_round",
       "depends_on": [],
       "file_path": "targets/json_escape/candidate.mjs",
-      "approach": "Export jsonEscape(str) with zero comments, imports, or dynamic eval, strictly beating the holder latency across 6 interleaved seeded rounds."
+      "approach": "Export jsonEscape(str) with zero comments, imports, or dynamic eval. It runs in a sandboxed child process and must match the oracle on golden and fresh random inputs, and beat the holder by at least 5% (mean of per-process-pair median ratios, winning at least 75% of paired rounds, every round on a new random dataset timed by the verifier)."
     }
   ]
 }

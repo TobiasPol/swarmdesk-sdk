@@ -32,6 +32,12 @@ jobs:
           git fetch -q --depth 1 "https://github.com/${GITHUB_REPOSITORY}.git" "$GITHUB_SHA"
           git checkout -q --detach FETCH_HEAD
 
+      # The templates' sandbox needs a Node with the permission model and --allow-net (tested on 26).
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26"
+
       - name: Versions
         run: |
           node --version
@@ -56,7 +62,7 @@ jobs:
       - name: Shell scripts
         run: |
           set -eu
-          scripts=(action/*.sh templates/tensor-rank/scripts/*.sh)
+          scripts=(action/*.sh templates/*/scripts/*.sh)
           for f in "${scripts[@]}"; do bash -n "$f"; done
           shellcheck --version | head -n 2
           shellcheck "${scripts[@]}"

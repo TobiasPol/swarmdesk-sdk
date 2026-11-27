@@ -5,17 +5,17 @@
     {
       "name": "monthly_active_revenue",
       "title": "Monthly active net revenue report (SQL)",
-      "summary": "Rewrite monthly_active_revenue query.sql to eliminate full-table scans and correlated subqueries while matching the exact reference result set across all seeded datasets.",
+      "summary": "Rewrite monthly_active_revenue query.sql to lower its SQLite query-plan cost (fewer full-table scans and correlated subqueries) while matching the exact reference result set across all seeded datasets.",
       "kind": "bound",
       "domain": "SQL & Query Optimization",
-      "source_url": "https://www.postgresql.org/docs/current/using-explain.html",
+      "source_url": "https://www.sqlite.org/eqp.html",
       "direction": "minimize",
-      "baseline_value": 3000,
-      "sota_value": 150,
-      "metric_unit": "vm_steps",
+      "baseline_value": 3162,
+      "sota_value": 795,
+      "metric_unit": "query_plan_cost",
       "depends_on": [],
       "file_path": "targets/monthly_active_revenue/query.sql",
-      "approach": "Submit one read-only SELECT or WITH query (no comments, no semicolons) matching reference.sql output exactly with lower deterministic query plan cost."
+      "approach": "Submit one read-only SELECT or WITH query (no comments, no semicolons) matching reference.sql output exactly with a lower SQLite query-plan cost: VDBE opcode count, +500 per SCAN, +900 per correlated subquery, +20 per SEARCH, +100 per temp B-tree. This is a heuristic over EXPLAIN output, not measured runtime or I/O."
     }
   ]
 }
