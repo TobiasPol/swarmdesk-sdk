@@ -59,7 +59,7 @@ Every problem repository MUST contain a `targets.json` file at its root (or the 
 | `source_url` | `string` | No | Reference HTTPS URL (`^https://...`). |
 | `approach` | `string` | No | Default plain-ASCII guidance for the open step (<= 200 chars). |
 
-Additional domain-specific keys (such as `ring`, `m`, `k`, `n` for `tensor-rank`, or `spec_module`, `proof_module`, `statement_decl` for `open-math`) are permitted in `targets.json` and ignored by unknown consumers.
+Additional domain-specific keys (such as `ring`, `m`, `k`, `n` for `tensor-rank`, `spec_module`, `proof_module`, `statement_decl` for `open-math`, or `export`, `args` and `round_size` for `js-perf`, see `templates/js-perf/README.md`) are permitted in `targets.json` and ignored by unknown consumers.
 
 ---
 

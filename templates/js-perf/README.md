@@ -6,13 +6,33 @@ A zero-dependency Swarmdesk problem template for optimizing latency-critical Jav
 
 1. `targets/<name>/reference.mjs` holds the frozen ground-truth oracle (verifier process only).
 2. `targets/<name>/candidate.mjs` holds the current record holder that agents optimize.
-3. `checker/dataset.mjs` generates inputs: a fixed public golden set (607 strings) and **fresh** random strings per run from a random seed that is recorded in the verdict (`class_fuel.seed`, reproduce with `--seed <n>`).
+3. `targets/<name>/dataset.mjs` generates that target's inputs: `golden()` returns a fixed public golden set (607 strings for `json_escape`, 422 argument lists for `parse_range`) and `fresh(seed, size)` returns **fresh** random inputs per run from a random seed that is recorded in the verdict (`class_fuel.seed`, reproduce with `--seed <n>`). `checker/dataset.mjs` only holds the shared seed helpers.
 4. `checker/verify.mjs` guards the source, then runs the benchmark in 8 independent process pairs (two fresh processes can differ by a few percent for identical code). In each pair holder and candidate each run 9 rounds (5 warm-up, 4 timed) in their own sandboxed child, **one after the other, never alive at the same time** (so a candidate cannot signal or burn CPU against the holder), and the order alternates per pair. Round k of both sides uses the same dataset of 4,800 strings; datasets are never reused: every round seed is `sha256(master seed : pair : round)` from a 48-bit random master seed, so earlier rounds reveal nothing about later ones, and a cache keyed on the input cannot hit. The **parent** takes the time around each whole request (including IPC), so the candidate cannot influence the clock, and every output of every round is verified against the oracle. The candidate is accepted if the median over pairs of (1 - median of that pair's candidate/holder time ratios) is at least 5% and it wins at least 75% of the 32 paired rounds. Short blocks and a median keep one pair hit by a burst of load on a shared CI runner from swinging the verdict. The holder compared with itself is rejected (about half the rounds are won).
 5. Pair with `TobiasPol/swarmdesk-sdk/action@<commit sha>` (`mode: guard` / `mode: report`; pin the action to a commit, see CONTRACT.md) and `npx swarmdesk-cli loop` for overnight optimization sprints.
 
 `targets.json` `baseline_value`/`sota_value` are indicative microseconds per round measured on one development machine; verdicts compare holder and candidate on the same machine in the same run, never against those numbers.
 
 Because the parent times a full round trip, a fixed IPC cost is part of both scores; a real speed-up still shows, but the reported cut is smaller than an in-process measurement would give.
+
+## Targets
+
+Each entry in `targets.json` names its folder under `targets/` and says how the function is called:
+
+| Field | Meaning |
+| --- | --- |
+| `export` | The function the candidate must export, for example `jsonEscape` or `parseRange` (a plain identifier; default `jsonEscape`). |
+| `args` | `"single"`: each input is the one argument. `"spread"`: each input is an argument list, called as `fn(...input)`. |
+| `round_size` | Inputs per timed round (default 4,800). Lower it for functions that are slow per call. |
+
+Inputs and outputs must survive JSON: the parent sends inputs to the sandbox as JSON, and the child returns each result as JSON text. A candidate must produce the reference's **outcome** on every input:
+
+- the same JSON text of the returned value, so key order and array order count;
+- `undefined` where the reference returns `undefined`;
+- a throw where the reference throws. The error's type and message are not compared.
+
+The reference sees a fresh copy of each input, so a reference that mutates its arguments cannot change what the candidate is sent.
+
+`json_escape` (one string argument) and `parse_range` (`parseRange(size, header)`, two arguments, object or number results) are the two example targets.
 
 ## Sandbox: what is enforced
 
@@ -48,4 +68,5 @@ The regex source guard (`guard_rejected`: comments, `import`, `eval`, `construct
 ```bash
 scripts/check.sh                # self-check baseline equivalence
 scripts/check.sh json_escape    # compare working copy against origin/main holder
+scripts/check.sh parse_range    # same for the two-argument example
 ```

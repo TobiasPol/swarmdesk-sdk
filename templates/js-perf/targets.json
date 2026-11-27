@@ -15,7 +15,28 @@
       "metric_unit": "us_per_round",
       "depends_on": [],
       "file_path": "targets/json_escape/candidate.mjs",
+      "export": "jsonEscape",
+      "args": "single",
+      "round_size": 4800,
       "approach": "Export jsonEscape(str) with zero comments, imports, or dynamic eval. It runs in a sandboxed child process and must match the oracle on golden and fresh random inputs, and beat the holder by at least 5% (mean of per-process-pair median ratios, winning at least 75% of paired rounds, every round on a new random dataset timed by the verifier)."
+    },
+    {
+      "name": "parse_range",
+      "title": "HTTP Range header parser (JS)",
+      "summary": "Optimize parseRange(size, header) in plain ESM JavaScript for minimum execution time per 4,800-call round while returning exactly what the reference returns: -2 for a malformed header, -1 when nothing is satisfiable, otherwise the unit and the sorted, merged ranges.",
+      "kind": "bound",
+      "domain": "HTTP & Protocol Parsers",
+      "source_url": "https://www.rfc-editor.org/rfc/rfc9110#section-14.2",
+      "direction": "minimize",
+      "baseline_value": 5100,
+      "sota_value": 4600,
+      "metric_unit": "us_per_round",
+      "depends_on": [],
+      "file_path": "targets/parse_range/candidate.mjs",
+      "export": "parseRange",
+      "args": "spread",
+      "round_size": 4800,
+      "approach": "Export parseRange(size, header) with zero comments, imports, or dynamic eval. Each input is called as parseRange(size, header). Outputs are compared as JSON text with the oracle on golden and fresh random headers (key order included), and the candidate must beat the holder by at least 5% under the same paired-round rules as json_escape."
     }
   ]
 }

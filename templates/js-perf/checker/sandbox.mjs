@@ -44,19 +44,21 @@ export function parseReply(line, expected) {
   if (!msg || !Array.isArray(msg.results) || msg.results.length !== expected) {
     return failure('trapped', 'candidate sent a malformed reply');
   }
-  const results = msg.results.map((r) =>
-    r && typeof r === 'object' && Object.hasOwn(r, 'v') ? { ok: true, value: r.v } : { ok: false },
-  );
+  // {"u":1} (undefined) stays a failure for callers that do not expect it; js-perf compares it.
+  const results = msg.results.map((r) => {
+    if (r && typeof r === 'object' && Object.hasOwn(r, 'v')) return { ok: true, value: r.v };
+    return r && typeof r === 'object' && r.u === 1 ? { ok: false, undef: true } : { ok: false };
+  });
   return { ok: true, results };
 }
 
 // The permission model only denies the network by default in Node versions that know --allow-net.
 export const sandboxSupported = () => process.allowedNodeEnvironmentFlags.has('--allow-net');
 
-function spawnChild({ dir, modulePath, exportName, maxOldSpaceMb }) {
+function spawnChild({ dir, modulePath, exportName, spread, maxOldSpaceMb }) {
   const child = spawn(
     process.execPath,
-    [...sandboxFlags(modulePath, maxOldSpaceMb), CHILD_PATH, modulePath, exportName],
+    [...sandboxFlags(modulePath, maxOldSpaceMb), CHILD_PATH, modulePath, exportName, spread ? 'spread' : 'single'],
     { stdio: ['pipe', 'ignore', 'ignore', 'pipe'], env: {}, cwd: dir },
   );
   child.stdin.on('error', () => {});
@@ -110,7 +112,7 @@ function request({ child, state }, limits, inputs, timeoutMs) {
   });
 }
 
-export function startSandbox({ source, exportName, ...overrides }) {
+export function startSandbox({ source, exportName, spread = false, ...overrides }) {
   if (!sandboxSupported()) {
     const reason = 'this Node has no --allow-net permission flag; the sandbox cannot deny network access';
     return { run: async () => failure('fault', reason), close() {} };
@@ -119,7 +121,7 @@ export function startSandbox({ source, exportName, ...overrides }) {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), 'swarmdesk-sandbox-'));
   const modulePath = join(dir, 'module.mjs');
   writeFileSync(modulePath, source);
-  const proc = spawnChild({ dir, modulePath, exportName, maxOldSpaceMb: limits.maxOldSpaceMb });
+  const proc = spawnChild({ dir, modulePath, exportName, spread, maxOldSpaceMb: limits.maxOldSpaceMb });
   return {
     run: (inputs, timeoutMs = limits.timeoutMs) => request(proc, limits, inputs, timeoutMs),
     close() {

@@ -2,71 +2,25 @@
 // Zero-dependency differential equivalence + interleaved benchmark verifier for JS hot paths.
 // The candidate runs in a separate Node process under the permission model (see sandbox.mjs).
 // This process computes every verdict and takes every timing; nothing the candidate prints,
-// sends or reports about itself is trusted.
+// sends or reports about itself is trusted. Each target brings its own export name, argument mode,
+// reference and input generators (see target.mjs).
 import { randomInt } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { buildDataset, buildFreshDataset, deriveSeed, GOLDEN_SEED } from './dataset.mjs';
+import { deriveSeed } from './dataset.mjs';
+import { DEFAULT_MAX_BYTES, guardCandidateSource, rejected } from './guard.mjs';
 import { withSandbox } from './sandbox.mjs';
+import { candidateOutcome, findTarget, loadManifest, loadTarget } from './target.mjs';
 
-export const DEFAULT_MAX_BYTES = 65536;
+export { DEFAULT_MAX_BYTES, guardCandidateSource };
+
 const MIN_IMPROVEMENT_RATIO = 0.05;
 const PAIRS = 8;
 const WARMUP_ROUNDS = 5;
 const BENCH_ROUNDS = 4;
 const MIN_WIN_RATIO = 0.75;
-const ROUND_SIZE = 4800;
-
-// Cheap first filter only. The security boundary is the sandbox, not this list.
-const FORBIDDEN_PATTERNS = [
-  [/\/\//, 'single-line comments are not allowed'],
-  [/\/\*/, 'block comments are not allowed'],
-  [/\bimport\b/, 'import statements are not allowed'],
-  [/\brequire\s*\(/, 'require() is not allowed'],
-  [/\beval\s*\(/, 'eval() is not allowed'],
-  [/\bFunction\s*\(/, 'Function constructor is not allowed'],
-  [/\bconstructor\b/, 'constructor access is not allowed'],
-  [/\bprocess\b/, 'process access is not allowed'],
-  [/\bglobalThis\b/, 'globalThis access is not allowed'],
-  [/\bProxy\b/, 'Proxy is not allowed'],
-  [/__proto__/, '__proto__ access is not allowed'],
-  [/\bReflect\b/, 'Reflect is not allowed'],
-  [/\bfetch\s*\(/, 'network calls are not allowed'],
-];
-
-function rejected(reasonCode, reason, extra = {}) {
-  return {
-    verdict: 'REJECTED',
-    reason_code: reasonCode,
-    reason,
-    resolution: '',
-    metric_value: extra.metric_value ?? null,
-    holder_value: extra.holder_value ?? null,
-    proof_lines: 0,
-    wasm_bytes: 0,
-    class_fuel: extra.class_fuel ?? '{}',
-  };
-}
-
-export function guardCandidateSource(rawText, maxBytes = DEFAULT_MAX_BYTES) {
-  if (typeof rawText !== 'string' || rawText.trim().length === 0) {
-    return rejected('schema_error', 'submission file is empty');
-  }
-  if (Buffer.byteLength(rawText, 'utf8') > maxBytes) {
-    return rejected('size_limit', `submission exceeds ${maxBytes} bytes`);
-  }
-  if (rawText.includes('\0') || rawText.charCodeAt(0) === 0xfeff) {
-    return rejected('guard_rejected', 'submission contains invalid control bytes');
-  }
-  for (const [pattern, message] of FORBIDDEN_PATTERNS) {
-    if (pattern.test(rawText)) return rejected('guard_rejected', message);
-  }
-  if (!/export\s+function\s+jsonEscape\s*\(/.test(rawText)) {
-    return rejected('schema_error', 'candidate must export function jsonEscape');
-  }
-  return null;
-}
+const FRESH_EQUIVALENCE_SIZE = 1500;
 
 // 48-bit master seed; every dataset seed is derived from it with SHA-256 (see dataset.mjs).
 export function randomSeed() {
@@ -79,40 +33,36 @@ function median(values) {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
-async function loadReference(referencePath) {
-  const mod = await import(pathToFileURL(resolve(referencePath)).href);
-  if (typeof mod.jsonEscape !== 'function') throw new Error('reference lacks jsonEscape');
-  return mod.jsonEscape;
-}
+const sandboxOptions = (source, target) => ({ source, exportName: target.exportName, spread: target.spread });
 
-// Runs `box` on `inputs` and compares every output with `expected`. Returns timing on success.
+// Runs `box` on `inputs` and compares every outcome with `expected`. Returns timing on success.
 async function runChecked(box, inputs, expected, label) {
   const res = await box.run(inputs);
   if (!res.ok) return { ok: false, reasonCode: res.code, reason: res.reason };
   for (let i = 0; i < inputs.length; i += 1) {
-    if (!res.results[i].ok) return { ok: false, reasonCode: 'trapped', reason: `candidate threw on ${label} sample ${i}` };
-    if (res.results[i].value !== expected[i]) {
-      return { ok: false, reasonCode: 'wrong_answer', reason: `output mismatch at ${label} sample ${i}` };
-    }
+    const got = candidateOutcome(res.results[i]);
+    if (got === expected[i]) continue;
+    if (got === 't') return { ok: false, reasonCode: 'trapped', reason: `candidate threw on ${label} sample ${i}` };
+    return { ok: false, reasonCode: 'wrong_answer', reason: `output mismatch at ${label} sample ${i}` };
   }
   return { ok: true, elapsedNs: res.elapsedNs };
 }
 
-async function checkEquivalence(box, refFn, seed) {
-  const golden = buildDataset(GOLDEN_SEED);
-  const fresh = buildFreshDataset(deriveSeed(seed, 'equivalence'));
-  const a = await runChecked(box, golden, golden.map(refFn), 'golden');
+async function checkEquivalence(box, target, seed) {
+  const golden = target.golden();
+  const fresh = target.fresh(deriveSeed(seed, 'equivalence'), FRESH_EQUIVALENCE_SIZE);
+  const a = await runChecked(box, golden, target.expect(golden), 'golden');
   if (!a.ok) return a;
-  return runChecked(box, fresh, fresh.map(refFn), 'fresh');
+  return runChecked(box, fresh, target.expect(fresh), 'fresh');
 }
 
 // Runs every round of one side in its own sandbox, one request per round (warm-up included), and
 // returns the parent-measured time of each. The other side is not alive at the same time, so a
 // candidate cannot disturb the holder's timing.
-function timeSide({ source, rounds, refFn, seed, check }) {
-  return withSandbox({ source, exportName: 'jsonEscape' }, async (box) => {
+function timeSide({ source, rounds, target, seed, check }) {
+  return withSandbox(sandboxOptions(source, target), async (box) => {
     if (check) {
-      const eq = await checkEquivalence(box, refFn, seed);
+      const eq = await checkEquivalence(box, target, seed);
       if (!eq.ok) return eq;
     }
     const times = [];
@@ -128,18 +78,18 @@ function timeSide({ source, rounds, refFn, seed, check }) {
 // Two fresh processes can differ by a few percent for identical code (JIT and heap layout), so the
 // benchmark is repeated in PAIRS independent process pairs, alternating which side runs first, and the
 // results are pooled. Round k of the holder and of the candidate use the same, never-reused, dataset.
-async function benchmark({ holderSource, candSource, refFn, seed }) {
+async function benchmark({ holderSource, candSource, target, seed }) {
   const pairs = [];
   for (let p = 0; p < PAIRS; p += 1) {
     const rounds = [];
     for (let r = 0; r < WARMUP_ROUNDS + BENCH_ROUNDS; r += 1) {
-      const data = buildFreshDataset(deriveSeed(seed, 'round', p, r), ROUND_SIZE);
-      rounds.push({ data, expected: data.map(refFn) });
+      const data = target.fresh(deriveSeed(seed, 'round', p, r), target.roundSize);
+      rounds.push({ data, expected: target.expect(data) });
     }
     const out = {};
     for (const side of p % 2 === 0 ? ['holder', 'cand'] : ['cand', 'holder']) {
       const source = side === 'holder' ? holderSource : candSource;
-      out[side] = await timeSide({ source, rounds, refFn, seed, check: p === 0 });
+      out[side] = await timeSide({ source, rounds, target, seed, check: p === 0 });
       if (!out[side].ok) return { ...out[side], side };
     }
     pairs.push({ holderTimes: out.holder.times, candTimes: out.cand.times });
@@ -147,25 +97,23 @@ async function benchmark({ holderSource, candSource, refFn, seed }) {
   return { ok: true, pairs };
 }
 
-export async function verifyCandidateFiles({
-  candidatePath,
-  holderPath,
-  referencePath,
-  maxBytes = DEFAULT_MAX_BYTES,
-  seed = randomSeed(),
-}) {
+/** Judges one candidate file against the holder for the target `targetName` in `manifestPath`. */
+export async function verifyCandidateFiles({ candidatePath, holderPath, manifestPath, targetName, seed = randomSeed() }) {
+  const { rootDir, manifest } = loadManifest(manifestPath);
+  const spec = findTarget(manifest, targetName);
+  if (!spec) return rejected('schema_error', 'unknown target');
   const raw = readFileSync(candidatePath, 'utf8');
-  const guardError = guardCandidateSource(raw, maxBytes);
+  const guardError = guardCandidateSource(raw, manifest.max_bytes ?? DEFAULT_MAX_BYTES, spec.export ?? 'jsonEscape');
   if (guardError) return guardError;
 
-  let refFn;
+  let target;
   try {
-    refFn = await loadReference(referencePath);
+    target = await loadTarget(rootDir, spec);
   } catch {
     return rejected('fault', 'verifier could not load the target oracle');
   }
-  const fuel = JSON.stringify({ pairs: PAIRS, rounds: BENCH_ROUNDS, round_size: ROUND_SIZE, seed });
-  const bench = await benchmark({ holderSource: readFileSync(holderPath, 'utf8'), candSource: raw, refFn, seed });
+  const fuel = JSON.stringify({ pairs: PAIRS, rounds: BENCH_ROUNDS, round_size: target.roundSize, seed });
+  const bench = await benchmark({ holderSource: readFileSync(holderPath, 'utf8'), candSource: raw, target, seed });
   if (!bench.ok) {
     if (bench.side === 'holder') return rejected('fault', `holder baseline failed eval: ${bench.reason}`, { class_fuel: fuel });
     return rejected(bench.reasonCode, bench.reason, { class_fuel: fuel });
@@ -205,31 +153,27 @@ function scoreVerdict({ raw, pairs, fuel }) {
   };
 }
 
-export async function verifySelfCheck(manifestPath, { seed = randomSeed() } = {}) {
-  const absManifest = resolve(manifestPath);
-  const rootDir = dirname(absManifest);
-  const manifest = JSON.parse(readFileSync(absManifest, 'utf8'));
-  const results = [];
-  let allOk = true;
-
-  for (const target of manifest.targets ?? []) {
-    const raw = readFileSync(resolve(rootDir, target.file_path), 'utf8');
-    const guardError = guardCandidateSource(raw, manifest.max_bytes ?? DEFAULT_MAX_BYTES);
-    if (guardError) {
-      allOk = false;
-      results.push({ target: target.name, ok: false, reason_code: guardError.reason_code, reason: guardError.reason });
-      continue;
-    }
-    const refFn = await loadReference(resolve(rootDir, 'targets', target.name, 'reference.mjs'));
-    const res = await withSandbox({ source: raw, exportName: 'jsonEscape' }, (box) => checkEquivalence(box, refFn, seed));
-    if (!res.ok) {
-      allOk = false;
-      results.push({ target: target.name, ok: false, reason_code: res.reasonCode, reason: res.reason });
-      continue;
-    }
-    results.push({ target: target.name, ok: true, samples: buildDataset(GOLDEN_SEED).length, seed });
+async function selfCheckOne(rootDir, manifest, spec, seed) {
+  const raw = readFileSync(resolve(rootDir, spec.file_path), 'utf8');
+  const guardError = guardCandidateSource(raw, manifest.max_bytes ?? DEFAULT_MAX_BYTES, spec.export ?? 'jsonEscape');
+  if (guardError) return { target: spec.name, ok: false, reason_code: guardError.reason_code, reason: guardError.reason };
+  let target;
+  try {
+    target = await loadTarget(rootDir, spec);
+  } catch (err) {
+    return { target: spec.name, ok: false, reason_code: 'fault', reason: `could not load target: ${err.message}` };
   }
-  return { ok: allOk, checked: results.length, results };
+  const res = await withSandbox(sandboxOptions(raw, target), (box) => checkEquivalence(box, target, seed));
+  if (!res.ok) return { target: spec.name, ok: false, reason_code: res.reasonCode, reason: res.reason };
+  return { target: spec.name, ok: true, samples: target.golden().length, seed };
+}
+
+/** Checks that every target's record file matches its reference on golden and fresh inputs. */
+export async function verifySelfCheck(manifestPath, { seed = randomSeed() } = {}) {
+  const { rootDir, manifest } = loadManifest(manifestPath);
+  const results = [];
+  for (const spec of manifest.targets ?? []) results.push(await selfCheckOne(rootDir, manifest, spec, seed));
+  return { ok: results.every((r) => r.ok), checked: results.length, results };
 }
 
 function parseFlags(args) {
@@ -252,15 +196,14 @@ function emitVerdict(verdict, outPath) {
 
 async function runVerify(flags) {
   const manifestPath = resolve(flags.targets ?? 'targets.json');
-  const rootDir = dirname(manifestPath);
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  const targetSpec = (manifest.targets ?? []).find((t) => t.name === flags.target);
-  if (!targetSpec) return emitVerdict(rejected('schema_error', 'unknown target'), flags.out);
+  const { rootDir, manifest } = loadManifest(manifestPath);
+  const spec = findTarget(manifest, flags.target);
+  if (!spec) return emitVerdict(rejected('schema_error', 'unknown target'), flags.out);
   const verdict = await verifyCandidateFiles({
     candidatePath: resolve(flags.candidate),
-    holderPath: flags.holder ? resolve(flags.holder) : resolve(rootDir, targetSpec.file_path),
-    referencePath: resolve(rootDir, 'targets', targetSpec.name, 'reference.mjs'),
-    maxBytes: manifest.max_bytes ?? DEFAULT_MAX_BYTES,
+    holderPath: flags.holder ? resolve(flags.holder) : resolve(rootDir, spec.file_path),
+    manifestPath,
+    targetName: spec.name,
     seed: flags.seed ? Number.parseInt(flags.seed, 10) : randomSeed(),
   });
   return emitVerdict(verdict, flags.out);

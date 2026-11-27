@@ -5,13 +5,14 @@ import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { buildFreshDataset, deriveSeed } from '../templates/js-perf/checker/dataset.mjs';
+import { deriveSeed } from '../templates/js-perf/checker/dataset.mjs';
+import { fresh as buildFreshDataset } from '../templates/js-perf/targets/json_escape/dataset.mjs';
 import { verifyCandidateFiles, verifySelfCheck } from '../templates/js-perf/checker/verify.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const target = join(root, 'templates/js-perf/targets/json_escape');
 const holderPath = join(target, 'candidate.mjs');
-const referencePath = join(target, 'reference.mjs');
+const manifestPath = join(root, 'templates/js-perf/targets.json');
 const tmp = mkdtempSync(join(tmpdir(), 'sd-jsperf-'));
 test.after(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -39,14 +40,15 @@ const HOLDER = `${await import('node:fs').then((fs) => fs.readFileSync(holderPat
 const judge = (name, source, seed = 1234567) => {
   const candidatePath = join(tmp, `${name}.mjs`);
   writeFileSync(candidatePath, source);
-  return verifyCandidateFiles({ candidatePath, holderPath, referencePath, seed });
+  return verifyCandidateFiles({ candidatePath, holderPath, manifestPath, targetName: 'json_escape', seed });
 };
 
 test('js-perf baseline self-check passes (inside the sandbox)', async () => {
   const res = await verifySelfCheck(join(root, 'templates/js-perf/targets.json'));
-  assert.equal(res.ok, true);
-  assert.equal(res.checked, 1);
+  assert.equal(res.ok, true, JSON.stringify(res.results));
+  assert.equal(res.checked, 2);
   assert.equal(res.results[0].samples, 607);
+  assert.equal(res.results[1].samples, 422);
 });
 
 test('js-perf accepts a faster escaper and records the seed', async () => {

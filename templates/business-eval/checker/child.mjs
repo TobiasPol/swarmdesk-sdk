@@ -1,11 +1,14 @@
 // Runs INSIDE the sandbox child (see sandbox.mjs). Loads the untrusted module and answers
-// JSON-line requests: stdin carries {"inputs":[...]}, fd 3 carries {"results":[...]}.
+// JSON-line requests: stdin carries {"inputs":[...]}, fd 3 carries {"results":[...]}. Each result is
+// {"v":<value>}, {"u":1} when the function returned undefined, or {"t":1} when it threw. With the
+// "spread" mode each input is an argument list; otherwise it is the single argument.
 // Its stdout/stderr are discarded by the parent. This file must not import anything from the
 // target directory (reference.mjs and friends are not readable from inside the sandbox).
 import { createWriteStream } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-const [modulePath, exportName] = process.argv.slice(2);
+const [modulePath, exportName, mode] = process.argv.slice(2);
+const spread = mode === 'spread';
 const reply = createWriteStream(null, { fd: 3 });
 
 let fn = null;
@@ -20,8 +23,8 @@ try {
 
 function callOne(input) {
   try {
-    const json = JSON.stringify(fn(input));
-    return json === undefined ? '{"t":1}' : `{"v":${json}}`;
+    const json = JSON.stringify(spread ? fn(...input) : fn(input));
+    return json === undefined ? '{"u":1}' : `{"v":${json}}`;
   } catch {
     return '{"t":1}';
   }
