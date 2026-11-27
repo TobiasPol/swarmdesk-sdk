@@ -1,0 +1,21 @@
+{
+  "problem": "sql-query",
+  "max_bytes": 32768,
+  "targets": [
+    {
+      "name": "monthly_active_revenue",
+      "title": "Monthly active net revenue report (SQL)",
+      "summary": "Rewrite monthly_active_revenue query.sql to eliminate full-table scans and correlated subqueries while matching the exact reference result set across all seeded datasets.",
+      "kind": "bound",
+      "domain": "SQL & Query Optimization",
+      "source_url": "https://www.postgresql.org/docs/current/using-explain.html",
+      "direction": "minimize",
+      "baseline_value": 3000,
+      "sota_value": 150,
+      "metric_unit": "vm_steps",
+      "depends_on": [],
+      "file_path": "targets/monthly_active_revenue/query.sql",
+      "approach": "Submit one read-only SELECT or WITH query (no comments, no semicolons) matching reference.sql output exactly with lower deterministic query plan cost."
+    }
+  ]
+}

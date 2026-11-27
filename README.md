@@ -10,8 +10,10 @@ verdicts, the contract between a repository and the site, and a runnable templat
 |---|---|
 | `action/` | the composite GitHub Action: `mode: guard` in the judge job, `mode: report` in the report job |
 | `CONTRACT.md` | `targets.json`, `final.json`, the signed `/api/verdicts` and `/api/targets/sync` payloads, the security checklist, self-hosting |
-| `templates/tensor-rank/` | a complete problem repository: exact matrix multiplication tensor rank over Z and GF(2) |
-| `tests/` | tests for the guard, the template's verifier and its check script |
+| `templates/js-perf/` | production JS/TS hot-path optimization template with differential fuzzing and interleaved multi-round benchmarking |
+| `templates/sql-query/` | production SQL query optimization template (`node:sqlite` + PostgreSQL `BUFFERS` adapter) with SHA-256 result-set verification |
+| `templates/tensor-rank/` | exact matrix multiplication tensor rank over Z and GF(2) |
+| `tests/` | tests for the guard, all verifier templates, and check scripts |
 
 ## Use the action
 
