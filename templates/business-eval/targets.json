@@ -1,0 +1,21 @@
+{
+  "problem": "business-eval",
+  "max_bytes": 65536,
+  "targets": [
+    {
+      "name": "pricing_router",
+      "title": "B2B SaaS pricing compliance & LLM router cost optimization",
+      "summary": "Preserve exact German/EU VAT, reverse-charge, discount rules, and task quality SLAs while minimizing total LLM eval cost units.",
+      "kind": "bound",
+      "domain": "Business & Compliance Evals",
+      "source_url": "https://joinswarmdesk.com/pilots",
+      "direction": "minimize",
+      "baseline_value": 100000,
+      "sota_value": 10000,
+      "metric_unit": "eval_cost_units",
+      "depends_on": [],
+      "file_path": "targets/pricing_router/candidate.mjs",
+      "approach": "Export routeAndPrice(scenario) with zero comments, imports, or dynamic eval, passing 100% of 240 billing/VAT/SLA evals at strictly lower model cost."
+    }
+  ]
+}
