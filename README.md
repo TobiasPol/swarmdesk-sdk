@@ -63,3 +63,7 @@ this; `tests/check-script.test.mjs` holds it to it.
 ```bash
 node --test tests/*.test.mjs
 ```
+
+## License
+
+Apache License 2.0, see [LICENSE](LICENSE). The problem repositories that use this SDK are licensed under Apache-2.0 too.
